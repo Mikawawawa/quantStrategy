@@ -58,16 +58,19 @@ def before_trading_start(account,data):
 
 # 盘内每tick处理函数
 def handle_data(account,data):
+    log.info("point1")
     # 大盘风控
     if account.defend<1:
         #平仓
         log.info("大盘风控平仓")
         pourAll(account)
     else:
+        log.info("point2")
         if get_time()=="0930":
-            # # 9:30调用每日短线波段操作函数
-            # for stock in account.sl:
-            #     a_buyCheck(stock,account)
+            log.info("point3")
+            # 9:30调用每日短线波段操作函数
+            for stock in account.sl:
+                a_buyCheck(stock,account)
             # 9:30处理集合竞价
             # 购入高优先级股票
             for i in range(len(account.hb)):
@@ -87,6 +90,7 @@ def handle_data(account,data):
                     account.holdHb.append(stock)
 
         if get_time()=="0932":
+            log.info("point4")
             # 卖出符合条件的A
             for stock in account.holdSl:
                 if stock in account.hold:
@@ -94,10 +98,11 @@ def handle_data(account,data):
             # 风险控制
             a_riskDefend(account)
         if get_time()=="0933":
-            for stock in account.hold:
-                delayCheck(stock,data,account)
+            log.info("point5")
+            delayCheck(data,account)
         # 9:35购入低优先级股票
         if get_time()=="0935":
+            log.info("point6")
             for i in account.hb.index :
                 if account.hb.ix[i,'buypoint']==0 and len(account.positions)<account.maxStock:
                     atr = getATR(account.hb.ix[i,'symbol'])
@@ -109,6 +114,7 @@ def handle_data(account,data):
                     
         # 在execPoint进行打板策略风控和售出
         if get_time() in account.execPoint:
+            log.info("point7")
             for stock in account.holdHb:
                 b_sellCheck(stock,data,account)
     return
@@ -151,12 +157,20 @@ def trade_amount(stock,amount):
         cancel_order(orders)
     return
 
+# 判断是否是Nan
+def isNaN(params):
+    return params!=params
+
 # 清仓单只股票
 # 这里还是考虑了所有股票的
 def pourStock(stock,account):
     trade_target(stock,0)
     if stock in account.hold:
         account.hold.pop(stock)
+    if stock in account.holdHb:
+        account.holdSl.remove(stock)
+    if stock in account.holdHb:
+        account.holdHb.remove(stock)
 
 # 清仓全部股票
 # 由于当日买入的不能进行出手，所以从account.hold里面选择股票
@@ -218,18 +232,23 @@ def getHistory(stock, terms,start=0,step='1d'):
     return close[0:terms]
 
 #持仓到期处理
-def delayCheck(stock,data,account):
-    if (stock in account.hold)and (account.hold[stock] > account.periods):
-        log.info("持有到期卖出:"+stock)
-        trade_target(stock, 0)
-        
-        if stock in account.holdSl:
-            #account.holdSl.pop(stock)
-            account.holdSl.remove(stock)
-        if stock in account.holdHb:
-            #account.holdHb.pop(stock)
-            account.holdHb.remove(stock)
-
+def delayCheck(data,account):
+    temp=[]
+    for stock in account.hold:
+        if (stock in account.hold)and (account.hold[stock] > account.periods):
+            log.info("持有到期卖出:"+stock)
+            trade_target(stock, 0)
+            if stock in account.hold:
+                temp.append(stock)
+            if stock in account.holdSl:
+                #account.holdSl.pop(stock)
+                account.holdSl.remove(stock)
+            if stock in account.holdHb:
+                #account.holdHb.pop(stock)
+                account.holdHb.remove(stock)
+    for stock in temp:
+        account.hold.pop(stock)
+    
 #大盘安全函数
 def secureRatio(account,data):
     #获取上证50指数成分股代码
@@ -286,16 +305,17 @@ def a_buyCheck(stock, account):
 
     if buypoint > 3:
         atr = getATR(stock)
-        amount = int(account.cash/(atr[-1]*100))
-        trade_amount(stock,amount)              #按量买入
-        account.holdSl.append(stock)            #添加记录
-        log.info("波段买入"+stock+"，数量", amount)
+        if not isNaN(atr[-1]):
+            amount = int(account.cash/(atr[-1]*100))
+            trade_amount(stock,amount)              #按量买入
+            account.holdSl.append(stock)            #添加记录
+            log.info("波段买入"+stock+"，数量", amount)
     return
 # MA条件
 def a_condition_MA_b(stock):
     # 符合MA5>MA10>MA20
     price = history(stock, ['open', 'close'], 20, '1d', False, 'pre', is_panel=1)
-    close = price.iloc[:, 0]
+    close = price['close']
     MA5 = talib.MA(np.array(close), timeperiod=5)
     MA10 = talib.MA(np.array(close), timeperiod=10)
     MA20 = talib.MA(np.array(close), timeperiod=20)
@@ -363,16 +383,24 @@ def a_condition_WeekTor_b(stock):
 # ---------------------------------------
 # 卖出判断
 def a_sellCheck(stock, account):
+    log.info("a1")
     sellPoint = a_condition_MA_s(
         stock)+a_condition_Flow_s(stock)+a_condition_RSI_s(stock)
     temp=[]
     if sellPoint > 1:
         if stock in account.holdSl:
+            log.info("a2")
             # 平仓
-            trade_target(stock,0)
-            log.info("波段卖点卖出"+stock)
-            temp.append(stock)
-        account.holdSl=list(set(account.holdSl) ^ set(temp))
+            id=order_target(stock,0)
+            orders = get_open_orders(id)
+            if orders and len(orders)>1:
+                log.info("a3")
+                cancel_order(orders)
+            else:
+                log.info("波段卖点卖出"+stock)
+                temp.append(stock)
+                account.holdSl=list(set(account.holdSl) ^ set(temp))
+                account.hold.pop(stock)
     return
 # MA条件
 def a_condition_MA_s(stock):
@@ -429,7 +457,7 @@ def a_riskDefend(account):
     suspension = 0
     for stock in (get_all_securities('stock', get_date()).index):
         #这里把原来的1d改成了1m，从取昨天的变成取今天的了
-        paused = history(stock, ['is_paused'], 5, '1d', False,'pre', is_panel=1)['is_paused']
+        paused = history(stock, ['is_paused'], 5, '1m', False,'pre', is_panel=1)['is_paused']
         if len(paused)>0 and paused[0]==1:
             suspension+=1
     if suspension > 20:
@@ -439,11 +467,16 @@ def a_riskDefend(account):
     if condition > 0:
         for stock in account.holdSl:
             if stock in account.hold:
-                trade_target(stock,0)
-                temp.append(stock)
-                log.info("波段风控卖出"+stock)
-    #重置account.holdSl
-    account.holdSl = list(set(account.holdSl) ^ set(temp))
+                id=order_target(stock,0)
+                orders = get_open_orders(id)
+                if orders and len(orders)>1:
+                    cancel_order(orders)
+                else:
+                    log.info("波段风控卖出"+stock)
+                    account.holdSl.remove(stock)
+                    account.hold.pop(stock)
+    # #重置account.holdSl
+    # account.holdSl = list(set(account.holdSl) ^ set(temp))
 # =======================
 # 策略B（hitBoard）
 # ---------------------------------------
@@ -452,15 +485,15 @@ def b_buyCheck(stock,data):
     v=data.current(stock)[stock]
     close=v.prev_close
     begin=v.open
-
+    #这里数值范围要讨论
     gains=(begin-close)/close
     if gains>0.06 or gains<-0.04:
         return -1
     elif gains>=-0.04 and gains<=0.02:
         return 0
-    elif gains>0.02 and gains<=0.04:
+    elif gains>0.02 and gains<=0.06:
         return 1
-    return 0
+    # return 0
 
 # 流通股本
 def b_getShareCapital(stock):
@@ -483,13 +516,23 @@ def b_sellCheck(stock,data,account):
     if stock in account.hold:
         amount=account.positions[stock].total_amount
         if b_riskDefend(stock,data):
-            trade_amount(stock,0)
-            log.info("超短风控卖出"+stock)    
-            account.holdHb.pop(dictLoc(account.holdHb,stock))
-        if b_rsiCheck(stock,data) or b_runtimeTrCheck(stock,data):
-            trade_amount(stock,0)
-            log.info("超短卖点卖出"+stock)    
-            account.holdHb.pop(dictLoc(account.holdHb,stock))
+            id=order(stock,0)
+            orders = get_open_orders(id)
+            if orders and len(orders)>1:
+                cancel_order(orders)
+            else:
+                log.info("超短风控卖出"+stock)    
+                account.holdHb.pop(dictLoc(account.holdHb,stock))
+                account.hold.pop(stock)
+        elif b_rsiCheck(stock,data) or b_runtimeTrCheck(stock,data):
+            id=order(stock,0)
+            orders = get_open_orders(id)
+            if orders and len(orders)>1:
+                cancel_order(orders)
+            else:
+                log.info("超短卖点卖出"+stock)    
+                account.holdHb.pop(dictLoc(account.holdHb,stock))
+                account.hold.pop(stock)
     return
 # rsi判断
 def b_rsiCheck(stock,data):
@@ -502,7 +545,7 @@ def b_rsiCheck(stock,data):
         RSI.ix[i,'rsi1']=rsi1
         RSI.ix[i,'rsi2']=rsi2
 
-    flag=checkthrough(RSI['rsi1'],RSI['rsi2'])
+    flag=checkthrough(RSI['rsi1'],RSI['rsi2'])[0]
     if flag==-1:
         return True
     else:
@@ -514,7 +557,7 @@ def b_runtimeTrCheck(stock,data):
         return False
     #前日换手量
     else:
-        exc_y=data.history(stock,'turnover_rate',1,'1d',True,None)[stock]['turnover_rate'][0]
+        exc_y=data.history(stock,'turnover_rate',1,'1d',True,None)[stock]['turnover_rate'][0]/(4*60)
         exc_n=data.history(stock,'turnover_rate',1,'1m',True,None)[stock]['turnover_rate'][0]
         if exc_n>1.3*exc_y:
             return True
