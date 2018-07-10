@@ -7,7 +7,7 @@ import numpy as np
 import talib
 
 def initialize(account):
-    account.periods=10                          # 持有日期上限
+    account.periods=3                          # 持有日期上限
     account.hold={}                                # 记录持有天数情况
 
     account.holdSl=[]                             # 记录短期波段的持有情况
@@ -29,6 +29,7 @@ def initialize(account):
     '''
     # 超短追涨的选股条件
     condition_hb='''
+    前天没有涨停,
     昨天的涨停,
     非新股,
     股票简称不包含st,
@@ -51,70 +52,70 @@ def before_trading_start(account,data):
         {
             "symbol":account.hb,
             "buypoint":np.zeros(len(account.hb)),
-            "shareCapital":np.zeros(len(account.hb)),
+            "market":np.zeros(len(account.hb)),
+            "kdj":np.zeros(len(account.hb)),
             "order_id":np.zeros(len(account.hb))
         })
     return
 
 # 盘内每tick处理函数
 def handle_data(account,data):
-    log.info("point1")
     # 大盘风控
     if account.defend<1:
         #平仓
         log.info("大盘风控平仓")
         pourAll(account)
     else:
-        log.info("point2")
         if get_time()=="0930":
-            log.info("point3")
-            # 9:30调用每日短线波段操作函数
-            for stock in account.sl:
-                a_buyCheck(stock,account)
+            log.info(account.holdHb)
+            # # 9:30调用每日短线波段操作函数
+            # for stock in account.sl:
+            #     a_buyCheck(stock,account)
             # 9:30处理集合竞价
             # 购入高优先级股票
             for i in range(len(account.hb)):
                 account.hb.ix[i,'buypoint']=b_buyCheck(account.hb.ix[i,'symbol'],data)
-                account.hb.ix[i,'shareCapital']=b_getShareCapital(account.hb.ix[i,'symbol'])
-
-            account.hb=account.hb.sort_values(by=['buypoint','shareCapital'],ascending=[False,False])
-            account.hb=account.hb[0:min(6,len(account.hb))]
+                account.hb.ix[i,'market']=b_getMarket(account.hb.ix[i,'symbol'])
+                account.hb.ix[i,'kdj']=b_getKDJ(account.hb.ix[i,'symbol'])
+                #log.info(account.hb.ix[i,'market'])
+            
+            account.hb=account.hb[account.hb.market<10000000000]
+            account.hb=account.hb.sort_values(by=['buypoint','kdj'],ascending=[False,True])
+            account.hb=account.hb[0:min(5,len(account.hb))]
 
             for i in account.hb.index:
-                if account.hb.ix[i,'buypoint']==1 and len(account.positions)<account.maxStock:
+                if account.hb.ix[i,'buypoint']==1 and len(account.holdHb)<7 and account.hb.ix[i,'symbol'] not in account.holdHb:
                     atr = getATR(account.hb.ix[i,'symbol'])
-                    amount = int(account.cash/(atr[-1]*100))
+                    amount = int(account.cash/(atr[-1]*20))
                     stock = account.hb.ix[i,'symbol']
-                    log.info("超短高优先买入"+stock+",数量"+str(amount))
-                    trade_value(stock,amount)
+                    log.info("超短高优先买入"+stock)
+                    # log.info("超短高优先买入"+stock+",数量"+str(amount))
+                    trade_value(stock,800000)
                     account.holdHb.append(stock)
 
-        if get_time()=="0932":
-            log.info("point4")
-            # 卖出符合条件的A
-            for stock in account.holdSl:
-                if stock in account.hold:
-                    a_sellCheck(stock, account)
-            # 风险控制
-            a_riskDefend(account)
+        # if get_time()=="0932":
+        #     # 卖出符合条件的A
+        #     for stock in account.holdSl:
+        #         if stock in account.hold:
+        #             a_sellCheck(stock, account)
+        #     # 风险控制
+        #     a_riskDefend(account)
         if get_time()=="0933":
-            log.info("point5")
             delayCheck(data,account)
         # 9:35购入低优先级股票
         if get_time()=="0935":
-            log.info("point6")
             for i in account.hb.index :
-                if account.hb.ix[i,'buypoint']==0 and len(account.positions)<account.maxStock:
+                if account.hb.ix[i,'buypoint']==0 and len(account.holdHb)<7 and account.hb.ix[i,'symbol'] not in account.holdHb:
                     atr = getATR(account.hb.ix[i,'symbol'])
                     if not isNaN(atr[-1]):
-                        amount = int(account.cash/(atr[-1]*100))
-                        trade_value(account.hb.ix[i,'symbol'],amount)
-                        log.info("超短低优先买入"+account.hb.ix[i,'symbol']+",数量"+str(amount))
+                        amount = int(account.cash/(atr[-1]*20))
+                        trade_value(account.hb.ix[i,'symbol'],800000)
+                        # log.info("超短低优先买入"+account.hb.ix[i,'symbol']+",数量"+str(amount))
+                        log.info("超短低优先买入"+account.hb.ix[i,'symbol'])
                         account.holdHb.append(account.hb.ix[i,'symbol'])
                     
         # 在execPoint进行打板策略风控和售出
         if get_time() in account.execPoint:
-            log.info("point7")
             for stock in account.holdHb:
                 b_sellCheck(stock,data,account)
     return
@@ -127,6 +128,15 @@ def after_trading_end(account, data):
             account.hold[stock] = 0
         else:
             account.hold[stock] += 1
+    for stock in account.hold:
+        if stock not in list(account.positions):
+            account.hold.pop(stock)
+    for stock in account.holdHb:
+        if stock not in list(account.positions):
+            account.holdHb.remove(stock)
+    for stock in account.holdSl:
+        if stock not in list(account.positions):
+            account.holdSl.remove(stock)  
     return
 
 # =======================
@@ -245,38 +255,13 @@ def delayCheck(data,account):
                 account.holdSl.remove(stock)
             if stock in account.holdHb:
                 #account.holdHb.pop(stock)
+                log.info(account.holdHb)
                 account.holdHb.remove(stock)
+                log.info(account.holdHb)
     for stock in temp:
         account.hold.pop(stock)
     
 #大盘安全函数
-def secureRatio(account,data):
-    #获取上证50指数成分股代码
-    stock_list= get_index_stocks(account.security)
-    #stock_list= get_index_stocks('000016.SH')
-    #如果个股CCI指标显示在0-30之间，买入！
-    close = data.history(stock_list, 'close', 120, '60m', True, fq='pre' ,is_panel = 0)
-    high = data.history(stock_list, 'high', 120, '60m', True, fq='pre' ,is_panel = 0)
-    low = data.history(stock_list, 'low', 120, '60m', True, fq='pre' ,is_panel = 0)
-    d=0
-    for i in stock_list:
-        dictMerged=dict(close[i])
-        dictMerged.update(high[i])
-        dictMerged.update(low[i])
-        dictMerged['tp'] = ((dictMerged['close']+dictMerged['low']+dictMerged['high'])/3)
-        df = pd.DataFrame(dictMerged['tp'])
-        if len(df)>0 and len(list(df.iloc[-1]))>0:
-            TP=list(df.iloc[-1])[0]
-            ma60=pd.rolling_mean(close[i],60)
-            MA=list(ma60.iloc[-1])[0]
-            df = pd.DataFrame(close[i])
-            md1=abs(ma60-df)
-            md=pd.rolling_mean(md1,60)
-            MD=list(md.iloc[-1])[0]
-            CCI=((TP-MA)/MD)/0.015
-            if CCI>100:
-                d=d+1
-    return d
 
 # 时间获取用封装的函数
 # 获取当前日期
@@ -303,11 +288,12 @@ def a_buyCheck(stock, account):
     buypoint = a_condition_MA_b(stock)+a_condition_Flow_b(stock)+a_condition_Volume_b(
         stock)+a_condition_KDJ_b(stock)+a_condition_WeekTor_b(stock)
 
-    if buypoint > 3:
+    if buypoint > 3 and len(account.holdSl)<10:
         atr = getATR(stock)
         if not isNaN(atr[-1]):
-            amount = int(account.cash/(atr[-1]*100))
-            trade_amount(stock,amount)              #按量买入
+            amount = int(account.cash/(atr[-1]*20))
+            trade_value(stock,6000000)              #按量买入
+            # trade_amount(stock,amount)              #按量买入
             account.holdSl.append(stock)            #添加记录
             log.info("波段买入"+stock+"，数量", amount)
     return
@@ -320,7 +306,8 @@ def a_condition_MA_b(stock):
     MA10 = talib.MA(np.array(close), timeperiod=10)
     MA20 = talib.MA(np.array(close), timeperiod=20)
 
-    if(MA5[-1] > MA10[-1]) and (MA10[-1] > MA20[-1]):
+    if(MA5[-1] > MA10[-1]):
+    # if(MA5[-1] > MA10[-1]) and (MA10[-1] > MA20[-1]):
         return 1
     else:
         return 0
@@ -383,18 +370,15 @@ def a_condition_WeekTor_b(stock):
 # ---------------------------------------
 # 卖出判断
 def a_sellCheck(stock, account):
-    log.info("a1")
     sellPoint = a_condition_MA_s(
         stock)+a_condition_Flow_s(stock)+a_condition_RSI_s(stock)
     temp=[]
     if sellPoint > 1:
         if stock in account.holdSl:
-            log.info("a2")
             # 平仓
             id=order_target(stock,0)
             orders = get_open_orders(id)
             if orders and len(orders)>1:
-                log.info("a3")
                 cancel_order(orders)
             else:
                 log.info("波段卖点卖出"+stock)
@@ -496,43 +480,45 @@ def b_buyCheck(stock,data):
     # return 0
 
 # 流通股本
-def b_getShareCapital(stock):
+def b_getMarket(stock):
     q = query(
         factor.date,
-        factor.circulating_cap
+        # factor.circulating_cap
+        factor.current_market_cap
     ).filter(
         factor.symbol == stock,
         factor.date == get_date()
     )
-    if len(get_factors(q)['factor_circulating_cap'])==0:
+    if len(get_factors(q)['factor_current_market_cap'])==0:
         return 0
-    elif get_factors(q)['factor_circulating_cap'][0] is None:
+    elif get_factors(q)['factor_current_market_cap'][0] is None:
         return 0
     else:
-        return get_factors(q)['factor_circulating_cap'][0]
+        return get_factors(q)['factor_current_market_cap'][0]
+
+def b_getKDJ(stock):
+    price = history(stock, ['close', 'high', 'low'], 20, '1d', False, 'pre', is_panel=1)
+    high = price['high']
+    low = price['low']
+    close = price['close']
+    K, D = talib.STOCH(np.array(high), np.array(low),np.array(close), 9, 3, 0, 3, 0)
+    J=3*K-2*D
+    return (K[-1]+D[-1]+J[-1])/3
 # ---------------------------------------
 # 卖出判断
 def b_sellCheck(stock,data,account):
     if stock in account.hold:
         amount=account.positions[stock].total_amount
         if b_riskDefend(stock,data):
-            id=order(stock,0)
-            orders = get_open_orders(id)
-            if orders and len(orders)>1:
-                cancel_order(orders)
-            else:
-                log.info("超短风控卖出"+stock)    
-                account.holdHb.pop(dictLoc(account.holdHb,stock))
-                account.hold.pop(stock)
+            order(stock,0,style="MarketOrder")
+            log.info("超短风控卖出"+stock)    
+            account.holdHb.pop(dictLoc(account.holdHb,stock))
+            account.hold.pop(stock)
         elif b_rsiCheck(stock,data) or b_runtimeTrCheck(stock,data):
-            id=order(stock,0)
-            orders = get_open_orders(id)
-            if orders and len(orders)>1:
-                cancel_order(orders)
-            else:
-                log.info("超短卖点卖出"+stock)    
-                account.holdHb.pop(dictLoc(account.holdHb,stock))
-                account.hold.pop(stock)
+            order(stock,0,style="MarketOrder")
+            log.info("超短卖点卖出"+stock)    
+            account.holdHb.pop(dictLoc(account.holdHb,stock))
+            account.hold.pop(stock)
     return
 # rsi判断
 def b_rsiCheck(stock,data):
@@ -579,23 +565,23 @@ def b_deltaCalc(close,data):
     return df
 # ---------------------------------------
 # 风控
-#单日跌幅4%,双日跌7%
+#单日跌幅2.5%,双日跌4%
 def b_riskDefend(stock, data):
-    #条件一：单日跌幅超过4%
+    #条件一：单日跌幅超过2%
     if(len(data.history(stock, 'close', 1, '1d', True, None)[stock]['close']))>0:
         begin = data.history(stock, 'close', 1, '1d', True, None)[stock]['close'][0]
         v=data.current(stock)[stock]
         now=v.open
 
-        if now/begin < 0.96:
+        if now/begin < 0.98:
             # log.info("b_1d")
             return True
         else:
-            #两日7%
+            #两日3.5%
             begin = data.history(stock, 'close', 2, '1d', True, None)[stock]['close'][0]
             v=data.current(stock)[stock]
             now=v.open
-            if now/begin < 0.93:
+            if now/begin < 0.965:
                 # log.info("b_2d")
                 return True
     else:
