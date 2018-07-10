@@ -86,13 +86,13 @@ def handle_data(account,data):
                     trade_value(stock,amount)
                     account.holdHb.append(stock)
 
-        # if get_time()=="0932":
-        #     # 卖出符合条件的A
-        #     for stock in account.holdSl:
-        #         if stock in account.hold:
-        #             a_sellCheck(stock, account)
-        #     # 风险控制
-        #     a_riskDefend(account)
+        if get_time()=="0932":
+            # 卖出符合条件的A
+            for stock in account.holdSl:
+                if stock in account.hold:
+                    a_sellCheck(stock, account)
+            # 风险控制
+            a_riskDefend(account)
         if get_time()=="0933":
             for stock in account.hold:
                 delayCheck(stock,data,account)
@@ -101,10 +101,11 @@ def handle_data(account,data):
             for i in account.hb.index :
                 if account.hb.ix[i,'buypoint']==0 and len(account.positions)<account.maxStock:
                     atr = getATR(account.hb.ix[i,'symbol'])
-                    amount = int(account.cash/(atr[-1]*100))
-                    trade_value(account.hb.ix[i,'symbol'],amount)
-                    log.info("超短低优先买入"+account.hb.ix[i,'symbol']+",数量"+str(amount))
-                    account.holdHb.append(account.hb.ix[i,'symbol'])
+                    if not isNaN(atr[-1]):
+                        amount = int(account.cash/(atr[-1]*100))
+                        trade_value(account.hb.ix[i,'symbol'],amount)
+                        log.info("超短低优先买入"+account.hb.ix[i,'symbol']+",数量"+str(amount))
+                        account.holdHb.append(account.hb.ix[i,'symbol'])
                     
         # 在execPoint进行打板策略风控和售出
         if get_time() in account.execPoint:
@@ -128,24 +129,24 @@ def after_trading_end(account, data):
 # 交易统一用交易函数，包含了撤单功能
 def trade_target(stock,aim):
     # 交易到目标股数
-    order_target(stock,aim)
-    orders = get_open_orders()
+    id=order_target(stock,aim)
+    orders = get_open_orders(id)
     if orders and len(orders)>1:
         cancel_order(orders)
     return
 
 def trade_value(stock,value):
     # 交易目标金额
-    order_value(stock,value)
-    orders = get_open_orders()
+    id=order_value(stock,value)
+    orders = get_open_orders(id)
     if orders and len(orders)>1:
         cancel_order(orders)
     return
 
 def trade_amount(stock,amount):
     # 交易目标数量
-    order(stock,amount)
-    orders = get_open_orders()
+    id=order(stock,amount)
+    orders = get_open_orders(id)
     if orders and len(orders)>1:
         cancel_order(orders)
     return
@@ -191,11 +192,10 @@ def rs(df):
 
 # ATR计算
 def getATR(stock):
-    price = history(stock, ['open', 'close', 'high', 'low',
-                            'turnover_rate'], 300, '1d', False, 'pre', is_panel=1)
-    high = price.iloc[:, 1]
-    low = price.iloc[:, 2]
-    close = price.iloc[:, 0]
+    price = history(stock, ['close', 'high', 'low'], 20, '1d', False, 'pre', is_panel=1)
+    high = price['high']
+    low = price['low']
+    close = price['close']
     return talib.ATR(np.array(high), np.array(low), np.array(close), timeperiod=14)
 
 #判断是否发生上、下穿
